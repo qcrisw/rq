@@ -91,8 +91,7 @@ class Job(object):
     @classmethod
     def create(cls, func, args=None, kwargs=None, connection=None,
                result_ttl=None, ttl=None, status=None, description=None,
-               depends_on=None, timeout=None, id=None, origin=None, meta=None,
-               raw=False):
+               depends_on=None, timeout=None, id=None, origin=None, meta=None):
         """Creates a new Job instance for the given function, arguments, and
         keyword arguments.
         """
@@ -105,11 +104,6 @@ class Job(object):
             raise TypeError('{0!r} is not a valid args list'.format(args))
         if not isinstance(kwargs, dict):
             raise TypeError('{0!r} is not a valid kwargs dict'.format(kwargs))
-
-        if raw:
-            assert len(args) == 1
-            assert len(kwargs) == 0
-            assert type(args[0]) == bytes
 
         job = cls(connection=connection)
         if id is not None:
@@ -142,7 +136,6 @@ class Job(object):
         job.timeout = parse_timeout(timeout)
         job._status = status
         job.meta = meta or {}
-        job.raw = raw
 
         # dependency could be job instance or id
         if depends_on is not None:
@@ -331,8 +324,6 @@ class Job(object):
         self._status = None
         self._dependency_id = None
         self.meta = {}
-        self.raw = False
-        self.arg = None
 
     def __repr__(self):  # noqa  # pragma: no cover
         return '{0}({1!r}, enqueued_at={2!r})'.format(self.__class__.__name__,
@@ -433,24 +424,16 @@ class Job(object):
             else:
                 return utcparse(as_text(date_str))
 
-        self.raw = obj.get('raw', None)
-        if self.raw is not None:
-            self.raw = as_text(self.raw)
-            self._func_name = obj.get('func_name').decode()
-            self._args = (obj.get('arg'),)
-            self._kwargs = {}
-            self._instance = None
-        else:
-            try:
-                raw_data = obj['data']
-            except KeyError:
-                raise NoSuchJobError('Unexpected job format: {0}'.format(obj))
+        try:
+            raw_data = obj['data']
+        except KeyError:
+            raise NoSuchJobError('Unexpected job format: {0}'.format(obj))
 
-            try:
-                self.data = zlib.decompress(raw_data)
-            except zlib.error:
-                # Fallback to uncompressed string
-                self.data = raw_data
+        try:
+            self.data = zlib.decompress(raw_data)
+        except zlib.error:
+            # Fallback to uncompressed string
+            self.data = raw_data
 
         self.created_at = to_date(as_text(obj.get('created_at')))
         self.origin = as_text(obj.get('origin'))
@@ -484,8 +467,7 @@ class Job(object):
         """
         obj = {}
         obj['created_at'] = utcformat(self.created_at or utcnow())
-        if not self.raw:
-            obj['data'] = zlib.compress(self.data)
+        obj['data'] = zlib.compress(self.data)
 
         if self.origin is not None:
             obj['origin'] = self.origin
@@ -503,10 +485,7 @@ class Job(object):
             except:
                 obj['result'] = 'Unpickleable return value'
         if self.exc_info is not None:
-            if self.raw:
-                obj['exc_info'] = str(self.exc_info).encode('utf-8')
-            else:
-                obj['exc_info'] = zlib.compress(str(self.exc_info).encode('utf-8'))
+            obj['exc_info'] = zlib.compress(str(self.exc_info).encode('utf-8'))
         if self.timeout is not None:
             obj['timeout'] = self.timeout
         if self.result_ttl is not None:
@@ -519,10 +498,6 @@ class Job(object):
             obj['meta'] = dumps(self.meta)
         if self.ttl:
             obj['ttl'] = self.ttl
-        if self.raw:
-            obj['raw'] = self.raw
-            obj['func_name'] = self._func_name
-            obj['arg'] = self._args[0]
 
         return obj
 
@@ -628,10 +603,7 @@ class Job(object):
         return self._result
 
     def _execute(self):
-        if self.raw:
-            return self.func(*self.args, raw=self.raw)
-        else:
-            return self.func(*self.args, **self.kwargs)
+        return self.func(*self.args, **self.kwargs)
 
     def get_ttl(self, default_ttl=None):
         """Returns ttl for a job that determines how long a job will be
