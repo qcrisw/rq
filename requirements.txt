@@ -3,5 +3,3 @@ click>=3.0.0
 -e .
 pytest-cov
 codecov
-coveralls
-pytest
