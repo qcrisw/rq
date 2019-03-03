@@ -280,7 +280,7 @@ class Queue(object):
     def create_job(self, func, args=None, kwargs=None, timeout=None,
                    result_ttl=None, ttl=None, failure_ttl=None,
                    description=None, depends_on=None, job_id=None,
-                   meta=None, status=JobStatus.QUEUED, retry=None):
+                   meta=None, status=JobStatus.QUEUED, retry=None, raw=False):
         """Creates a job based on parameters given."""
         timeout = parse_timeout(timeout)
 
@@ -300,8 +300,8 @@ class Queue(object):
             func, args=args, kwargs=kwargs, connection=self.connection,
             result_ttl=result_ttl, ttl=ttl, failure_ttl=failure_ttl,
             status=status, description=description,
-            depends_on=depends_on, timeout=timeout, id=job_id,
-            origin=self.name, meta=meta, serializer=self.serializer
+            depends_on=depends_on, timeout=timeout, job_id=job_id,
+            origin=self.name, meta=meta, serializer=self.serializer, raw=raw
         )
 
         if retry:
@@ -313,7 +313,7 @@ class Queue(object):
     def enqueue_call(self, func, args=None, kwargs=None, timeout=None,
                      result_ttl=None, ttl=None, failure_ttl=None,
                      description=None, depends_on=None, job_id=None,
-                     at_front=False, meta=None, retry=None):
+                     at_front=False, meta=None, retry=None, raw=False):
         """Creates a job to represent the delayed function call and enqueues
         it.
 nd
@@ -326,7 +326,7 @@ nd
             func, args=args, kwargs=kwargs, result_ttl=result_ttl, ttl=ttl,
             failure_ttl=failure_ttl, description=description, depends_on=depends_on,
             job_id=job_id, meta=meta, status=JobStatus.QUEUED, timeout=timeout,
-            retry=retry
+            retry=retry, raw=raw
         )
 
         # If a _dependent_ job depends on any unfinished job, register all the
@@ -401,6 +401,7 @@ nd
         at_front = kwargs.pop('at_front', False)
         meta = kwargs.pop('meta', None)
         retry = kwargs.pop('retry', None)
+        raw = kwargs.pop('raw', False)
 
         if 'args' in kwargs or 'kwargs' in kwargs:
             assert args == (), 'Extra positional arguments cannot be used when using explicit args and kwargs'  # noqa
@@ -408,30 +409,37 @@ nd
             kwargs = kwargs.pop('kwargs', None)
 
         return (f, timeout, description, result_ttl, ttl, failure_ttl,
-                depends_on, job_id, at_front, meta, retry, args, kwargs)
+                depends_on, job_id, at_front, meta, retry, raw, args, kwargs)
 
     def enqueue(self, f, *args, **kwargs):
         """Creates a job to represent the delayed function call and enqueues it."""
 
         (f, timeout, description, result_ttl, ttl, failure_ttl,
-         depends_on, job_id, at_front, meta, retry, args, kwargs) = Queue.parse_args(f, *args, **kwargs)
+         depends_on, job_id, at_front, meta, retry, raw, args, kwargs) = Queue.parse_args(f, *args, **kwargs)
+
+        if raw:
+            # If raw flag is true we leave the pickling up to the end user
+            # we ensure there is only one arg.
+            assert len(args) == 1
+            assert len(kwargs) == 0
+            assert type(args[0]) == bytes
 
         return self.enqueue_call(
             func=f, args=args, kwargs=kwargs, timeout=timeout,
             result_ttl=result_ttl, ttl=ttl, failure_ttl=failure_ttl,
             description=description, depends_on=depends_on, job_id=job_id,
-            at_front=at_front, meta=meta, retry=retry
+            at_front=at_front, meta=meta, retry=retry, raw=raw
         )
 
     def enqueue_at(self, datetime, f, *args, **kwargs):
         """Schedules a job to be enqueued at specified time"""
 
         (f, timeout, description, result_ttl, ttl, failure_ttl,
-         depends_on, job_id, at_front, meta, retry, args, kwargs) = Queue.parse_args(f, *args, **kwargs)
+         depends_on, job_id, at_front, meta, retry, raw, args, kwargs) = Queue.parse_args(f, *args, **kwargs)
         job = self.create_job(f, status=JobStatus.SCHEDULED, args=args, kwargs=kwargs,
                               timeout=timeout, result_ttl=result_ttl, ttl=ttl,
                               failure_ttl=failure_ttl, description=description,
-                              depends_on=depends_on, job_id=job_id, meta=meta, retry=retry)
+                              depends_on=depends_on, job_id=job_id, meta=meta, retry=retry, raw=raw)
 
         return self.schedule_job(job, datetime)
 

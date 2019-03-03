@@ -45,7 +45,7 @@ def truncate_long_string(data, maxlen=75):
     """ Truncates strings longer than maxlen
     """
     return (data[:maxlen] + '...') if len(data) > maxlen else data
-	
+
 def cancel_job(job_id, connection=None):
     """Cancels the job with the given job ID, preventing execution.  Discards
     any job info (i.e. it can't be requeued later).
@@ -77,8 +77,8 @@ class Job(object):
     @classmethod
     def create(cls, func, args=None, kwargs=None, connection=None,
                result_ttl=None, ttl=None, status=None, description=None,
-               depends_on=None, timeout=None, id=None, origin=None, meta=None,
-               failure_ttl=None, serializer=None):
+               depends_on=None, timeout=None, job_id=None, origin=None, meta=None,
+               failure_ttl=None, serializer=None, raw=False):
         """Creates a new Job instance for the given function, arguments, and
         keyword arguments.
         """
@@ -92,9 +92,15 @@ class Job(object):
         if not isinstance(kwargs, dict):
             raise TypeError('{0!r} is not a valid kwargs dict'.format(kwargs))
 
+        if raw:
+            assert len(args) == 1
+            assert len(kwargs) == 0
+            assert type(args[0]) == bytes
+
         job = cls(connection=connection, serializer=serializer)
-        if id is not None:
-            job.set_id(id)
+
+        if job_id is not None:
+            job.set_id(job_id)
 
         if origin is not None:
             job.origin = origin
@@ -124,6 +130,7 @@ class Job(object):
         job.timeout = parse_timeout(timeout)
         job._status = status
         job.meta = meta or {}
+        job.raw = raw
 
         # dependency could be job instance or id
         if depends_on is not None:
@@ -345,7 +352,7 @@ class Job(object):
         self.ttl = None
         self.worker_name = None
         self._status = None
-        self._dependency_ids = []        
+        self._dependency_ids = []
         self.meta = {}
         self.serializer = resolve_serializer(serializer)
         self.retries_left = None
@@ -353,10 +360,11 @@ class Job(object):
         self.retry_intervals = None
         self.redis_server_version = None
         self.last_heartbeat = None
+        self.raw = False
+        self.arg = None
 
     def __repr__(self):  # noqa  # pragma: no cover
         return '{0}({1!r}, enqueued_at={2!r})'.format(self.__class__.__name__,
-                                                      self._id,
                                                       self.enqueued_at)
 
     def __str__(self):
@@ -467,16 +475,24 @@ class Job(object):
     def restore(self, raw_data):
         """Overwrite properties with the provided values stored in Redis"""
         obj = decode_redis_hash(raw_data)
-        try:
-            raw_data = obj['data']
-        except KeyError:
-            raise NoSuchJobError('Unexpected job format: {0}'.format(obj))
+        self.raw = obj.get('raw', None)
+        if self.raw is not None:
+            self.raw = as_text(self.raw)
+            self._func_name = obj.get('func_name').decode()
+            self._args = (obj.get('arg'),)
+            self._kwargs = {}
+            self._instance = None
+        else:
+            try:
+                raw_data = obj['data']
+            except KeyError:
+                raise NoSuchJobError('Unexpected job format: {0}'.format(obj))
 
-        try:
-            self.data = zlib.decompress(raw_data)
-        except zlib.error:
-            # Fallback to uncompressed string
-            self.data = raw_data
+            try:
+                self.data = zlib.decompress(raw_data)
+            except zlib.error:
+                # Fallback to uncompressed string
+                self.data = raw_data
 
         self.created_at = str_to_date(obj.get('created_at'))
         self.origin = as_text(obj.get('origin'))
@@ -492,7 +508,7 @@ class Job(object):
                 self._result = self.serializer.loads(obj.get('result'))
             except Exception as e:
                 self._result = "Unserializable return value"
-        self.timeout = parse_timeout(obj.get('timeout')) if obj.get('timeout') else None
+        self.timeout = parse_timeout(as_text(obj.get('timeout'))) if obj.get('timeout') else None
         self.result_ttl = int(obj.get('result_ttl')) if obj.get('result_ttl') else None  # noqa
         self.failure_ttl = int(obj.get('failure_ttl')) if obj.get('failure_ttl') else None  # noqa
         self._status = obj.get('status').decode() if obj.get('status') else None
@@ -536,13 +552,14 @@ class Job(object):
         """
         obj = {
             'created_at': utcformat(self.created_at or utcnow()),
-            'data': zlib.compress(self.data),
             'started_at': utcformat(self.started_at) if self.started_at else '',
             'ended_at': utcformat(self.ended_at) if self.ended_at else '',
             'last_heartbeat': utcformat(self.last_heartbeat) if self.last_heartbeat else '',
             'worker_name': self.worker_name or ''
         }
 
+        if not self.raw:
+            obj['data'] = zlib.compress(self.data)
         if self.retries_left is not None:
             obj['retries_left'] = self.retries_left
         if self.retry_intervals is not None:
@@ -560,7 +577,11 @@ class Job(object):
             except:  # noqa
                 obj['result'] = "Unserializable return value"
         if self.exc_info is not None:
-            obj['exc_info'] = zlib.compress(str(self.exc_info).encode('utf-8'))
+            _info = str(self.exc_info).encode('utf-8')
+            if self.raw:
+                obj['exc_info'] = _info
+            else:
+                obj['exc_info'] = zlib.compress(_info)
         if self.timeout is not None:
             obj['timeout'] = self.timeout
         if self.result_ttl is not None:
@@ -575,6 +596,10 @@ class Job(object):
             obj['meta'] = self.serializer.dumps(self.meta)
         if self.ttl:
             obj['ttl'] = self.ttl
+        if self.raw:
+            obj['raw'] = self.raw
+            obj['func_name'] = self._func_name
+            obj['arg'] = self._args[0]
 
         return obj
 
@@ -715,7 +740,10 @@ class Job(object):
             pipeline.hmset(self.key, mapping)
 
     def _execute(self):
-        return self.func(*self.args, **self.kwargs)
+        if self.raw:
+            return self.func(*self.args, raw=self.raw)
+        else:
+            return self.func(*self.args, **self.kwargs)
 
     def get_ttl(self, default_ttl=None):
         """Returns ttl for a job that determines how long a job will be
@@ -772,7 +800,7 @@ class Job(object):
         from .registry import FailedJobRegistry
         return FailedJobRegistry(self.origin, connection=self.connection,
                                  job_class=self.__class__)
-    
+
     def get_retry_interval(self):
         """Returns the desired retry interval.
         If number of retries is bigger than length of intervals, the first
@@ -859,7 +887,7 @@ class Retry(object):
         super().__init__()
         if max < 1:
             raise ValueError('max: please enter a value greater than 0')
-        
+
         if isinstance(interval, int):
             if interval < 0:
                 raise ValueError('interval: negative numbers are not allowed')
@@ -869,6 +897,6 @@ class Retry(object):
                 if i < 0:
                     raise ValueError('interval: negative numbers are not allowed')
             intervals = interval
-        
+
         self.max = max
         self.intervals = intervals
