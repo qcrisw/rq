@@ -1,2 +1,7 @@
-redis>=2.7
+redis>=2.7,<2.10.6
 click>=3.0.0
+-e .
+pytest-cov
+codecov
+coveralls
+pytest
