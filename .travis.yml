@@ -1,21 +1,17 @@
 sudo: false
 language: python
+dist: xenial
 services:
   - redis
 python:
   - "2.7"
-  - "3.3"
   - "3.4"
   - "3.5"
   - "3.6"
-  - "3.7-dev"
-  - "pypy"
+  - "3.7"
+  - "pypy2.7-6.0"
 install:
-  - pip install -e .
-  - pip install pytest-cov
-  # - pip install coveralls
-  - pip install codecov
-  #- pip install pytest  # installed by Travis by default already
+  - pip install -r requirements.txt
 script:
   - RUN_SLOW_TESTS_TOO=1 py.test --cov rq --durations=5
 after_success:
