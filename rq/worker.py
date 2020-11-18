@@ -887,6 +887,7 @@ class Worker(object):
                 retry = True
                 retry_interval = job.get_retry_interval()
                 job.retries_left = job.retries_left - 1
+                self.log.warning("Retries left: %d", job.retries_left)
             else:
                 retry = False
                 job.set_status(JobStatus.FAILED, pipeline=pipeline)
