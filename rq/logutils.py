@@ -3,19 +3,32 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import logging
+import sys
 
 from rq.utils import ColorizingStreamHandler
+from rq.defaults import (DEFAULT_LOGGING_FORMAT,
+                         DEFAULT_LOGGING_DATE_FORMAT)
 
 
-def setup_loghandlers(level):
-    logger = logging.getLogger('rq.worker')
+def setup_loghandlers(level=None, date_format=DEFAULT_LOGGING_DATE_FORMAT,
+                      log_format=DEFAULT_LOGGING_FORMAT, name='rq.worker'):
+    logger = logging.getLogger(name)
+
     if not _has_effective_handler(logger):
-        logger.setLevel(level)
-        formatter = logging.Formatter(fmt='%(asctime)s %(message)s',
-                                      datefmt='%H:%M:%S')
-        handler = ColorizingStreamHandler()
+        formatter = logging.Formatter(fmt=log_format, datefmt=date_format)
+        handler = ColorizingStreamHandler(stream=sys.stdout)
         handler.setFormatter(formatter)
+        handler.addFilter(lambda record: record.levelno < logging.ERROR)
+        error_handler = ColorizingStreamHandler(stream=sys.stderr)
+        error_handler.setFormatter(formatter)
+        error_handler.addFilter(lambda record: record.levelno >= logging.ERROR)
         logger.addHandler(handler)
+        logger.addHandler(error_handler)
+
+    if level is not None:
+        # The level may be a numeric value (e.g. when using the logging module constants)
+        # Or a string representation of the logging level
+        logger.setLevel(level if isinstance(level, int) else level.upper())
 
 
 def _has_effective_handler(logger):

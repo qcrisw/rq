@@ -8,11 +8,13 @@ from __future__ import (absolute_import, division, print_function,
 
 import os
 import time
+import signal
 import sys
+import subprocess
 
 from rq import Connection, get_current_job, get_current_connection, Queue
 from rq.decorators import job
-from rq.compat import PY2
+from rq.compat import text_type
 from rq.worker import HerokuWorker
 
 
@@ -38,13 +40,18 @@ def say_raw_hello(name=None, raw=False):
 
 def say_hello_unicode(name=None):
     """A job with a single argument and a return value."""
-    return unicode(say_hello(name))  # noqa
+    return text_type(say_hello(name))  # noqa
 
 
 def do_nothing():
     """The best job in the world."""
     pass
 
+def raise_exc():
+    raise Exception('raise_exc error')
+
+def raise_exc_mock():
+    return raise_exc
 
 def div_by_zero(x):
     """Prepare for a division-by-zero exception."""
@@ -69,6 +76,17 @@ def create_file_after_timeout(path, timeout):
     time.sleep(timeout)
     create_file(path)
 
+def create_file_after_timeout_and_setsid(path, timeout):
+    os.setsid()
+    create_file_after_timeout(path, timeout)
+
+def launch_process_within_worker_and_store_pid(path, timeout):
+
+    p = subprocess.Popen(['sleep', str(timeout)])
+    with open(path, 'w') as f:
+        f.write('{}'.format(p.pid))
+
+    p.wait()
 
 def access_self():
     assert get_current_connection() is not None
@@ -111,10 +129,7 @@ class CallableObject(object):
 
 class UnicodeStringObject(object):
     def __repr__(self):
-        if PY2:
-            return u'é'.encode('utf-8')
-        else:
-            return u'é'
+        return u'é'
 
 
 with Connection():
@@ -126,6 +141,20 @@ with Connection():
 def black_hole(job, *exc_info):
     # Don't fall through to default behaviour (moving to failed queue)
     return False
+
+
+def add_meta(job, *exc_info):
+    job.meta = {'foo': 1}
+    job.save()
+    return True
+
+
+def save_key_ttl(key):
+    # Stores key ttl in meta
+    job = get_current_job()
+    ttl = job.connection.ttl(key)
+    job.meta = {'ttl': ttl}
+    job.save_meta()
 
 
 def long_running_job(timeout=10):
@@ -159,3 +188,20 @@ def run_dummy_heroku_worker(sandbox, _imminent_shutdown_delay):
 
 class DummyQueue(object):
     pass
+
+
+def kill_worker(pid, double_kill, interval=0.5):
+    # wait for the worker to be started over on the main process
+    time.sleep(interval)
+    os.kill(pid, signal.SIGTERM)
+    if double_kill:
+        # give the worker time to switch signal handler
+        time.sleep(interval)
+        os.kill(pid, signal.SIGTERM)
+
+
+class Serializer(object):
+    def loads(self): pass
+
+    def dumps(self): pass
+

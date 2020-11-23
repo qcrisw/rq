@@ -7,7 +7,7 @@ RQ (_Redis Queue_) is a simple Python library for queueing jobs and processing
 them in the background with workers.  It is backed by Redis and it is designed
 to have a low barrier to entry.  It can be integrated in your web stack easily.
 
-RQ requires Redis >= 2.7.0.
+RQ requires Redis >= 3.0.0.
 
 ## Getting started
 
@@ -36,14 +36,30 @@ And enqueue the function call:
 
 {% highlight python %}
 from my_module import count_words_at_url
-result = q.enqueue(
-             count_words_at_url, 'http://nvie.com')
+result = q.enqueue(count_words_at_url, 'http://nvie.com')
 {% endhighlight %}
 
-For a more complete example, refer to the [docs][d].  But this is the essence.
+Scheduling jobs are similarly easy:
 
-[d]: {{site.baseurl}}docs/
+{% highlight python %}
+# Schedule job to run at 9:15, October 10th
+job = queue.enqueue_at(datetime(2019, 10, 8, 9, 15), say_hello)
 
+# Schedule job to be run in 10 seconds
+job = queue.enqueue_in(timedelta(seconds=10), say_hello)
+{% endhighlight %}
+
+You can also ask RQ to retry failed jobs:
+
+{% highlight python %}
+from rq import Retry
+
+# Retry up to 3 times, failed job will be requeued immediately
+queue.enqueue(say_hello, retry=Retry(max=3))
+
+# Retry up to 3 times, with configurable intervals between retries
+queue.enqueue(say_hello, retry=Retry(max=3, interval=[10, 30, 60]))
+{% endhighlight %}
 
 ### The worker
 
@@ -51,7 +67,7 @@ To start executing enqueued function calls in the background, start a worker
 from your project's directory:
 
 {% highlight console %}
-$ rq worker
+$ rq worker --with-scheduler
 *** Listening for work on default
 Got count_words_at_url('http://nvie.com') from default
 Job result = 818
